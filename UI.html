@@ -1,0 +1,229 @@
+import RPi.GPIO as GPIO 
+
+from flask import Flask, render_template, Response, jsonify 
+
+import cv2  
+
+sudo apt-get update && sudo apt-get upgrade -y 
+
+sudo apt-get install -y libatlas-base-dev libjpeg-dev libtiff5-dev libpng-dev \ 
+
+libavcodec-dev libavformat-dev libswscale-dev libv4l-dev \ 
+
+libxvidcore-dev libx264-dev libgtk-3-dev libcanberra-gtk3-module 
+
+ 
+
+Pip3 install opencv-python 
+
+ 
+
+Pip3 install opencv-python –break-system-packages 
+
+app = Flask(__name__) 
+
+ 
+
+ 
+
+BUTTON_PIN = 17  
+
+GPIO.setmode(GPIO.BCM) 
+
+GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP) 
+
+ 
+
+doorbell_active = False 
+
+ 
+
+def doorbell_callback(channel): 
+
+    global doorbell_active 
+
+    doorbell_active = True 
+
+    print("Doorbell Ringing!") 
+
+ 
+
+ 
+
+GPIO.add_event_detect(BUTTON_PIN, GPIO.FALLING, callback=doorbell_callback, bouncetime=2000) 
+
+ 
+
+ 
+
+camera = cv2.VideoCapture(0) # 0 for standard USB cam or Pi Cam with legacy drivers 
+
+ 
+
+def gen_frames(): 
+
+    while True: 
+
+        success, frame = camera.read() 
+
+        if not success: break 
+
+        else: 
+
+            ret, buffer = cv2.imencode('.jpg', frame) 
+
+            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n') 
+
+ 
+
+ 
+
+@app.route('/') 
+
+def index(): 
+
+    return render_template('index.html') 
+
+ 
+
+@app.route('/video_feed') 
+
+def video_feed(): 
+
+    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame') 
+
+ 
+
+@app.route('/status') 
+
+def status(): 
+
+    global doorbell_active 
+
+    status_data = {'active': doorbell_active} 
+
+    doorbell_active = False # Reset after the UI checks it 
+
+    return jsonify(status_data) 
+
+ 
+
+if __name__ == '__main__': 
+
+    app.run(host='0.0.0.0', port=5000, debug=False) 
+
+The Frontend (HTML) 
+
+<!DOCTYPE html> 
+
+<html lang="en"> 
+
+<head> 
+
+    <meta charset="UTF-8"> 
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"> 
+
+    <title>Smart Doorbell</title> 
+
+    <script src="https://cdn.tailwindcss.com"></script> 
+
+</head> 
+
+<body id="main-bg" class="bg-slate-900 transition-colors duration-500 flex flex-col items-center justify-center h-screen overflow-hidden text-white"> 
+
+ 
+
+    <!-- Alert Text --> 
+
+    <h1 id="status-text" class="text-6xl font-black mb-8 uppercase tracking-widest text-slate-400">Monitoring...</h1> 
+
+ 
+
+    <!-- Video Container --> 
+
+    <div class="relative w-11/12 max-w-4xl aspect-video rounded-3xl border-8 border-slate-700 overflow-hidden shadow-2xl"> 
+
+        <img src="{{ url_for('video_feed') }}" class="w-full h-full object-cover"> 
+
+    </div> 
+
+ 
+
+    <!-- Action Buttons --> 
+
+    <div class="mt-12 flex gap-8"> 
+
+        <button onclick="resetUI()" class="bg-green-600 hover:bg-green-500 text-white text-5xl font-bold py-10 px-20 rounded-full shadow-2xl transition-transform active:scale-95"> 
+
+            TALK 
+
+        </button> 
+
+        <button onclick="resetUI()" class="bg-slate-700 hover:bg-slate-600 text-white text-5xl font-bold py-10 px-20 rounded-full shadow-2xl transition-transform active:scale-95"> 
+
+            IGNORE 
+
+        </button> 
+
+    </div> 
+
+ 
+
+    <script> 
+
+        const bg = document.getElementById('main-bg'); 
+
+        const statusText = document.getElementById('status-text'); 
+
+ 
+
+        // Check for doorbell rings every 1 second 
+
+        setInterval(async () => { 
+
+            const response = await fetch('/status'); 
+
+            const data = await response.json(); 
+
+             
+
+            if (data.active) { 
+
+                // Change UI to high-alert red 
+
+                bg.classList.replace('bg-slate-900', 'bg-red-600'); 
+
+                statusText.innerText = "SOMEONE IS AT THE DOOR!"; 
+
+                statusText.classList.replace('text-slate-400', 'text-white'); 
+
+                 
+
+                // Play a simple alert sound if desired 
+
+                let audio = new Audio('https://actions.google.com'); 
+
+                audio.play(); 
+
+            } 
+
+        }, 1000); 
+
+ 
+
+        function resetUI() { 
+
+            bg.classList.replace('bg-red-600', 'bg-slate-900'); 
+
+            statusText.innerText = "Monitoring..."; 
+
+            statusText.classList.replace('text-white', 'text-slate-400'); 
+
+        } 
+
+    </script> 
+
+</body> 
+
+</html> 
