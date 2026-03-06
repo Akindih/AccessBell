@@ -57,7 +57,22 @@ def process_person_folder(PERSON_NAME, folder_path):
         # Convert BGR → RGB
         rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-        # Detect face
+# python
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # folder where the script lives
+DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+
+if not os.path.isdir(DATASET_DIR):
+    print(f"Dataset folder not found at `{DATASET_DIR}`")
+    print(f"Current working directory: `{os.getcwd()}`")
+    # optional: create the folder if you expect it to be created automatically
+    # os.makedirs(DATASET_DIR, exist_ok=True)
+    raise SystemExit(1)
+
+for PERSON_NAME in os.listdir(DATASET_DIR):
+    folder_path = os.path.join(DATASET_DIR, PERSON_NAME)
+    if os.path.isdir(folder_path):
+        process_person_folder(PERSON_NAME, folder_path)        # Detect face
         boxes = face_recognition.face_locations(rgb)
         if len(boxes) == 0:
             print(f"No face found in: {filename}")
