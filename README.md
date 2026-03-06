@@ -2,7 +2,7 @@
 
 <h2>Configuration settings</h2>
 
-Fan configurations:
+Fan configurations:<br>
 dtparam=fan_temp0=50000 <br>
 dtparam=fan_temp0_hyst=5000 <br>
 dtparam=fan_temp0_speed=125 <br>
