@@ -1,0 +1,115 @@
+import RPi.GPIO as GPIO
+
+from flask import Flask, render_template, Response, jsonify
+
+import cv2
+
+sudo apt-get update && sudo apt-get upgrade -y
+
+sudo apt-get install -y libatlas-base-dev libjpeg-dev libtiff5-dev libpng-dev \
+
+libavcodec-dev libavformat-dev libswscale-dev libv4l-dev \
+
+libxvidcore-dev libx264-dev libgtk-3-dev libcanberra-gtk3-module
+
+
+
+Pip3 install opencv-python
+
+
+
+Pip3 install opencv-python –break-system-packages
+
+app = Flask(__name__)
+
+
+
+
+
+BUTTON_PIN = 17
+
+GPIO.setmode(GPIO.BCM)
+
+GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+
+
+doorbell_active = False
+
+
+
+def doorbell_callback(channel):
+
+    global doorbell_active
+
+    doorbell_active = True
+
+    print("Doorbell Ringing!")
+
+
+
+
+
+GPIO.add_event_detect(BUTTON_PIN, GPIO.FALLING, callback=doorbell_callback, bouncetime=2000)
+
+
+
+
+
+camera = cv2.VideoCapture(0) # 0 for standard USB cam or Pi Cam with legacy drivers
+
+
+
+def gen_frames():
+
+    while True:
+
+        success, frame = camera.read()
+
+        if not success: break
+
+        else:
+
+            ret, buffer = cv2.imencode('.jpg', frame)
+
+            yield (b'--frame\r\n' b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+
+
+
+
+@app.route('/')
+
+def index():
+
+    return render_template('index.html')
+
+
+
+@app.route('/video_feed')
+
+def video_feed():
+
+    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+
+@app.route('/status')
+
+def status():
+
+    global doorbell_active
+
+    status_data = {'active': doorbell_active}
+
+    doorbell_active = False # Reset after the UI checks it
+
+    return jsonify(status_data)
+
+
+
+if __name__ == '__main__':
+
+    app.run(host='0.0.0.0', port=5000, debug=False)
+
+The Frontend (HTML)

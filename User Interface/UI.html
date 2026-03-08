@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+
+<html lang="en"> 
+
+<head> 
+
+    <meta charset="UTF-8"> 
+
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"> 
+
+    <title>Smart Doorbell</title> 
+
+    <script src="https://cdn.tailwindcss.com"></script> 
+
+</head> 
+
+<body id="main-bg" class="bg-slate-900 transition-colors duration-500 flex flex-col items-center justify-center h-screen overflow-hidden text-white"> 
+
+ 
+
+    <!-- Alert Text --> 
+
+    <h1 id="status-text" class="text-6xl font-black mb-8 uppercase tracking-widest text-slate-400">Monitoring...</h1> 
+
+ 
+
+    <!-- Video Container --> 
+
+    <div class="relative w-11/12 max-w-4xl aspect-video rounded-3xl border-8 border-slate-700 overflow-hidden shadow-2xl"> 
+
+        <img src="{{ url_for('video_feed') }}" class="w-full h-full object-cover"> 
+
+    </div> 
+
+ 
+
+    <!-- Action Buttons --> 
+
+    <div class="mt-12 flex gap-8"> 
+
+        <button onclick="resetUI()" class="bg-green-600 hover:bg-green-500 text-white text-5xl font-bold py-10 px-20 rounded-full shadow-2xl transition-transform active:scale-95"> 
+
+            TALK 
+
+        </button> 
+
+        <button onclick="resetUI()" class="bg-slate-700 hover:bg-slate-600 text-white text-5xl font-bold py-10 px-20 rounded-full shadow-2xl transition-transform active:scale-95"> 
+
+            IGNORE 
+
+        </button> 
+
+    </div> 
+
+ 
+
+    <script> 
+
+        const bg = document.getElementById('main-bg'); 
+
+        const statusText = document.getElementById('status-text'); 
+
+ 
+
+        // Check for doorbell rings every 1 second 
+
+        setInterval(async () => { 
+
+            const response = await fetch('/status'); 
+
+            const data = await response.json(); 
+
+             
+
+            if (data.active) { 
+
+                // Change UI to high-alert red 
+
+                bg.classList.replace('bg-slate-900', 'bg-red-600'); 
+
+                statusText.innerText = "SOMEONE IS AT THE DOOR!"; 
+
+                statusText.classList.replace('text-slate-400', 'text-white'); 
+
+                 
+
+                // Play a simple alert sound if desired 
+
+                let audio = new Audio('https://actions.google.com'); 
+
+                audio.play(); 
+
+            } 
+
+        }, 1000); 
+
+ 
+
+        function resetUI() { 
+
+            bg.classList.replace('bg-red-600', 'bg-slate-900'); 
+
+            statusText.innerText = "Monitoring..."; 
+
+            statusText.classList.replace('text-white', 'text-slate-400'); 
+
+        } 
+
+    </script> 
+
+</body> 
+
+</html> 
