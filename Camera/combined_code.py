@@ -1,14 +1,14 @@
+import face_recognition
 import cv2
-import os
-from datetime import datetime
-from itertools import count
+import numpy as np
+import psycopg2
 from picamera2 import Picamera2
 import time
 import RPi.GPIO as GPIO
-import face_recognition
-import numpy as np
 import pickle
-
+import os
+from datetime import datetime
+from itertools import count
 
 # Load pre-trained face encodings
 print("[INFO] loading encodings...")
@@ -17,7 +17,19 @@ with open("encodings.pickle", "rb") as f:
 known_face_encodings = data["encodings"]
 known_face_names = data["names"]
 
-cv_scaler = 4 # this has to be a whole number
+# Add GPIO setup and needed libraries
+BUTTON_PIN = 26
+GPIO.setmode(GPIO.BCM)
+GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+# Initialize the camera
+picam2 = Picamera2()
+picam2.configure(picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (1920, 1080)}))
+picam2.configure(config)
+picam2.start()
+
+# Initialize our variables
+cv_scaler = 4  # this has to be a whole number
 
 face_locations = []
 face_encodings = []
@@ -26,39 +38,156 @@ frame_count = 0
 start_time = time.time()
 fps = 0
 
-# GPIO SETUP
-BUTTON_PIN = 26 #Pin 37
-GPIO.setmode(GPIO.BCM)
-GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-#convert --indir VIDEOS --outdir VIDEOS/CONVERTED
-# Change this to the name of the person you're photographing
-PERSON_NAME = "aki"  
+# PostgreSQL connection
+connection = psycopg2.connect(
+    host="localhost",
+    database="smart_doorbell",
+    user="doorbelldara",
+    password="doorbell19"
+)
+cursor = connection.cursor()
+
+
+# Dataset directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+
+if not os.path.isdir(DATASET_DIR):
+    print(f"Dataset folder not found at `{DATASET_DIR}`")
+    print(f"Current working directory: `{os.getcwd()}`")
+    raise SystemExit(1)
+
+
+# Loop through dataset folders
+for person_name in os.listdir(DATASET_DIR):
+    folder_path = os.path.join(DATASET_DIR, person_name)
+
+    if os.path.isdir(folder_path):
+        process_person_folder(person_name, folder_path)
+
+
+# Insert person into DB
+def insert_person(full_name, relationship=None):
+    cursor.execute("""
+        INSERT INTO known_person (full_name, relationship)
+        VALUES (%s, %s)
+        RETURNING person_id;
+    """, (full_name, relationship))
+
+    person_id = cursor.fetchone()[0]
+    connection.commit()
+    return person_id
+
+
+# Insert encoding into DB
+def insert_encoding(person_id, encoding):
+    binary_encoding = encoding.tobytes()
+
+    cursor.execute("""
+        INSERT INTO face_encoding (person_id, encoding)
+        VALUES (%s, %s);
+    """, (person_id, binary_encoding))
+
+    connection.commit()
+
+
+# Optional dataset check
+try:
+    f = open("dataset.csv", "r")
+    print("dataset opened")
+    f.close()
+except FileNotFoundError:
+    print("data.csv not found")
+except Exception as e:
+    print("error:", e)
+
 
 def create_folder(name):
     dataset_folder = "dataset"
     if not os.path.exists(dataset_folder):
         os.makedirs(dataset_folder)
-    
+
     person_folder = os.path.join(dataset_folder, name)
     if not os.path.exists(person_folder):
         os.makedirs(person_folder)
     return person_folder
 
+
 def capture_video(name):
     folder = create_folder(name)
 
-    # Initialize camera
-    picam2 = Picamera2()
-    config = picam2.create_video_configuration(
-        main={"format": "XRGB8888", "size": (640, 480)}
-    )
-    picam2.configure(config)
-    picam2.start()
 
-    time.sleep(2)  # Camera warmup
+# Load encodings from PostgreSQL
+def load_encodings():
+    cursor.execute("""
+        SELECT person_id, encoding
+        FROM face_encoding;
+    """)
+    rows = cursor.fetchall()
 
-    frame_width = 640
-    frame_height = 480
+    known_encodings = []
+    known_ids = []
+
+    for person_id, binary_encoding in rows:
+        enc = np.frombuffer(binary_encoding, dtype=np.float64)
+        known_encodings.append(enc)
+        known_ids.append(person_id)
+    print(f"Loaded {len(known_encodings)} encodings from DB.")
+    return known_encodings, known_ids
+
+
+known_encodings, known_ids = load_encodings()
+print(f"Loaded {len(known_encodings)} face encodings from database.")
+
+
+# Process one person's folder
+def process_person_folder(person_name, folder_path):
+    print(f"\nProcessing: {person_name}")
+
+    encodings = []
+
+    for filename in os.listdir(folder_path):
+        image_path = os.path.join(folder_path, filename)
+
+        image = cv2.imread(image_path)
+
+        if image is None:
+            print(f"Skipping unreadable file: {filename}")
+            continue
+
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Detect face
+        boxes = face_recognition.face_locations(rgb)
+
+        if len(boxes) == 0:
+            print(f"No face found in: {filename}")
+            continue
+
+        encoding = face_recognition.face_encodings(rgb, boxes)[0]
+        encodings.append(encoding)
+
+    if len(encodings) == 0:
+        print(f"No usable images for {person_name}")
+        return
+
+    # Insert person into DB
+    person_id = insert_person(person_name)
+
+    # Insert encodings
+    for enc in encodings:
+        insert_encoding(person_id, enc)
+
+    print(f"Added {len(encodings)} encodings for {person_name} (person_id={person_id})")
+
+
+# Log visitor into visitor_log table
+def log_visitor(person_id, recognised, confidence, snapshot=None):
+    cursor.execute("""
+        INSERT INTO visitor_log (person_id, recognised, confidence, snapshot)
+        VALUES (%s, %s, %s, %s);
+    """, (person_id, recognised, confidence, snapshot))
+    connection.commit()
 
     # Create video filename with timestamp
     filename = os.path.join(
@@ -68,99 +197,59 @@ def capture_video(name):
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(filename, fourcc, 20.0, (frame_width, frame_height))
 
-    print("Waiting for button press...")
-    GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
-    print("Button pressed! Recording for 5 seconds...")
 
-    duration = 10
-    end_time = time.time() + duration
+print("Waiting for button press to start photo capture...")
+# wait for button press
+GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
+print("Button pressed, Starting live recognition.")
 
-# Load pre-trained face encodings
-print("[INFO] loading encodings...")
-with open("encodings.pickle", "rb") as f:
-    data = pickle.loads(f.read())
-known_face_encodings = data["encodings"]
-known_face_names = data["names"]
-
-
-cv_scaler = 4 # this has to be a whole number
-
-face_locations = []
-face_encodings = []
-face_names = []
-frame_count = 0
-start_time = time.time()
-fps = 0
 
 def process_frame(frame):
     global face_locations, face_encodings, face_names
-    
+
     # Resize the frame using cv_scaler to increase performance (less pixels processed, less time spent)
-    resized_frame = cv2.resize(frame, (0, 0), fx=(1/cv_scaler), fy=(1/cv_scaler))
-    
+    resized_frame = cv2.resize(frame, (0, 0), fx=(1 / cv_scaler), fy=(1 / cv_scaler))
+
     # Convert the image from BGR to RGB colour space, the facial recognition library uses RGB, OpenCV uses BGR
     rgb_resized_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
-    
+
     # Find all the faces and face encodings in the current frame of video
     face_locations = face_recognition.face_locations(rgb_resized_frame)
     face_encodings = face_recognition.face_encodings(rgb_resized_frame, face_locations, model='large')
-    
+
     face_names = []
     for face_encoding in face_encodings:
         # See if the face is a match for the known face(s)
         matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
         name = "Unknown"
-        
+
         # Use the known face with the smallest distance to the new face
         face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
         best_match_index = np.argmin(face_distances)
         if matches[best_match_index]:
             name = known_face_names[best_match_index]
         face_names.append(name)
-    
+
     return frame
 
-    while time.time() < end_time:
-        frame = picam2.capture_array()
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
 
-        out.write(frame)
-        cv2.imshow("Recording", frame)
+def draw_results(frame):
+    # Display the results
+    for (top, right, bottom, left), name in zip(face_locations, face_names):
+        # Scale back up face locations since the frame we detected in was scaled
+        top *= cv_scaler
+        right *= cv_scaler
+        bottom *= cv_scaler
+        left *= cv_scaler
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+        # Draw a box around the face
+        cv2.rectangle(frame, (left, top), (right, bottom), (244, 42, 3), 3)
 
-    print("Recording complete!")
+        # Draw a label with a name below the face
+        cv2.rectangle(frame, (left - 3, top - 35), (right + 3, top), (244, 42, 3), cv2.FILLED)
+        font = cv2.FONT_HERSHEY_DUPLEX
+        cv2.putText(frame, name, (left + 6, top - 6), font, 1.0, (255, 255, 255), 1)
 
-if __name__ == "__main__":
-    capture_video(PERSON_NAME)
-   
-def process_frame(frame):
-    global face_locations, face_encodings, face_names
-    
-    # Resize the frame using cv_scaler to increase performance (less pixels processed, less time spent)
-    resized_frame = cv2.resize(frame, (0, 0), fx=(1/cv_scaler), fy=(1/cv_scaler))
-    
-    # Convert the image from BGR to RGB colour space, the facial recognition library uses RGB, OpenCV uses BGR
-    rgb_resized_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
-    
-    # Find all the faces and face encodings in the current frame of video
-    face_locations = face_recognition.face_locations(rgb_resized_frame)
-    face_encodings = face_recognition.face_encodings(rgb_resized_frame, face_locations, model='large')
-    
-    face_names = []
-    for face_encoding in face_encodings:
-        # See if the face is a match for the known face(s)
-        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-        name = "Unknown"
-        
-        # Use the known face with the smallest distance to the new face
-        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-        best_match_index = np.argmin(face_distances)
-        if matches[best_match_index]:
-            name = known_face_names[best_match_index]
-        face_names.append(name)
-    
     return frame
 
 
@@ -174,33 +263,53 @@ def calculate_fps():
         start_time = time.time()
     return fps
 
+
 while True:
     # Capture a frame from camera
     frame = picam2.capture_array()
-    
+
     # Process the frame with the function
     processed_frame = process_frame(frame)
-    
+
     # Get the text and boxes to be drawn based on the processed frame
     display_frame = draw_results(processed_frame)
-    
+
     # Calculate and update FPS
     current_fps = calculate_fps()
-    
+
     # Attach FPS counter to the text and boxes
-    cv2.putText(display_frame, f"FPS: {current_fps:.1f}", (display_frame.shape[1] - 150, 30), 
+    cv2.putText(display_frame, f"FPS: {current_fps:.1f}", (display_frame.shape[1] - 150, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-    
+
     # Display everything over the video feed.
     cv2.imshow('Video', display_frame)
-    
+
     # Break the loop and stop the script if 'q' is pressed
     if cv2.waitKey(1) == ord("q"):
-        break 
+        break
 
+duration = 10
+end_time = time.time() + duration
 
-    # Cleanup
-    out.release()
-    cv2.destroyAllWindows()
-    picam2.stop()
-    GPIO.cleanup()
+print("Capturing photos after recognition")
+end_time = time.time() + duration
+while time.time() < end_time:
+    frame = picam2.capture_array()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    photo_count += 1
+    cv2.imwrite(f"capture_{timestamp}.jpg", frame)
+    time.sleep(interval)
+print("Photo capture complete")
+
+# By breaking the loop we run this code here which closes everything
+cv2.destroyAllWindows()
+picam2.stop()
+
+# Close DB connection
+cursor.close()
+connection.close()
+
+print("\nAll done. Encodings stored in PostgreSQL.")
+
+if __name__ == "__main__":
+    capture_video(PERSON_NAME)
