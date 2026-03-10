@@ -25,7 +25,7 @@ GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 # Initialize the camera
 picam2 = Picamera2()
 picam2.configure(picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (1920, 1080)}))
-picam2.configure(config)
+#picam2.configure(config)
 picam2.start()
 
 # Initialize our variables
@@ -46,25 +46,6 @@ connection = psycopg2.connect(
     password="doorbell19"
 )
 cursor = connection.cursor()
-
-
-# Dataset directory
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATASET_DIR = os.path.join(BASE_DIR, "dataset")
-
-if not os.path.isdir(DATASET_DIR):
-    print(f"Dataset folder not found at `{DATASET_DIR}`")
-    print(f"Current working directory: `{os.getcwd()}`")
-    raise SystemExit(1)
-
-
-# Loop through dataset folders
-for person_name in os.listdir(DATASET_DIR):
-    folder_path = os.path.join(DATASET_DIR, person_name)
-
-    if os.path.isdir(folder_path):
-        process_person_folder(person_name, folder_path)
-
 
 # Insert person into DB
 def insert_person(full_name, relationship=None):
@@ -91,15 +72,65 @@ def insert_encoding(person_id, encoding):
     connection.commit()
 
 
-# Optional dataset check
-try:
-    f = open("dataset.csv", "r")
-    print("dataset opened")
-    f.close()
-except FileNotFoundError:
-    print("data.csv not found")
-except Exception as e:
-    print("error:", e)
+
+# Process one person's folder
+def process_person_folder(PERSON_NAME, folder_path):
+    print(f"\nProcessing: {PERSON_NAME}")
+
+    encodings = []
+
+    for filename in os.listdir(folder_path):
+        image_path = os.path.join(folder_path, filename)
+
+        image = cv2.imread(image_path)
+
+        if image is None:
+            print(f"Skipping unreadable file: {filename}")
+            continue
+
+        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+        # Detect face
+        boxes = face_recognition.face_locations(rgb)
+
+        if len(boxes) == 0:
+            print(f"No face found in: {filename}")
+            continue
+
+        encoding = face_recognition.face_encodings(rgb, boxes)[0]
+        encodings.append(encoding)
+
+    if len(encodings) == 0:
+        print(f"No usable images for {PERSON_NAME}")
+        return
+
+    # Insert person into DB
+    person_id = insert_person(PERSON_NAME)
+
+    # Insert encodings
+    for enc in encodings:
+        insert_encoding(person_id, enc)
+
+    print(f"Added {len(encodings)} encodings for {PERSON_NAME} (person_id={person_id})")
+
+
+
+# Dataset directory
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATASET_DIR = os.path.join(BASE_DIR, "dataset")
+
+if not os.path.isdir(DATASET_DIR):
+    print(f"Dataset folder not found at `{DATASET_DIR}`")
+    print(f"Current working directory: `{os.getcwd()}`")
+    raise SystemExit(1)
+
+
+# Loop through dataset folders
+for PERSON_NAME in os.listdir(DATASET_DIR):
+    folder_path = os.path.join(DATASET_DIR, PERSON_NAME)
+
+    if os.path.isdir(folder_path):
+        process_person_folder(PERSON_NAME, folder_path)
 
 
 def create_folder(name):
@@ -139,46 +170,6 @@ def load_encodings():
 known_encodings, known_ids = load_encodings()
 print(f"Loaded {len(known_encodings)} face encodings from database.")
 
-
-# Process one person's folder
-def process_person_folder(person_name, folder_path):
-    print(f"\nProcessing: {person_name}")
-
-    encodings = []
-
-    for filename in os.listdir(folder_path):
-        image_path = os.path.join(folder_path, filename)
-
-        image = cv2.imread(image_path)
-
-        if image is None:
-            print(f"Skipping unreadable file: {filename}")
-            continue
-
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        # Detect face
-        boxes = face_recognition.face_locations(rgb)
-
-        if len(boxes) == 0:
-            print(f"No face found in: {filename}")
-            continue
-
-        encoding = face_recognition.face_encodings(rgb, boxes)[0]
-        encodings.append(encoding)
-
-    if len(encodings) == 0:
-        print(f"No usable images for {person_name}")
-        return
-
-    # Insert person into DB
-    person_id = insert_person(person_name)
-
-    # Insert encodings
-    for enc in encodings:
-        insert_encoding(person_id, enc)
-
-    print(f"Added {len(encodings)} encodings for {person_name} (person_id={person_id})")
 
 
 # Log visitor into visitor_log table
@@ -289,6 +280,7 @@ while True:
         break
 
 duration = 10
+photo_count = 0
 end_time = time.time() + duration
 
 print("Capturing photos after recognition")
