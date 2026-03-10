@@ -1,4 +1,0 @@
-Flask==3.0.2
-RPi.GPIO==0.7.1
-# Using system OpenCV via apt: python3-opencv
-# Using Picamera2 via apt: python3-picamera2
