@@ -72,7 +72,7 @@ def get_video(filename):
     if not os.path.isfile(file_path):
         abort(404)
 
-    return send_from_directory(RECORDINGS_DIR, safe_name, as_attachment=False)
+    return send_from_directory(RECORDINGS_DIR, safe_name, as_attachment=False, conditional=True)
 
 @app.route("/api/name-person", methods=["POST"])
 def name_person():
