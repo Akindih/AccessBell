@@ -7,8 +7,14 @@ import time
 import RPi.GPIO as GPIO
 import pickle
 import os
+import subprocess
 from datetime import datetime
 from itertools import count
+
+# Directory where recordings are saved (must match appAPI.py)
+RECORDINGS_DIR = "/home/doorbellteam/FaceRec/doorbell_recordings"
+if not os.path.exists(RECORDINGS_DIR):
+    os.makedirs(RECORDINGS_DIR)
 
 # Load pre-trained face encodings
 print("[INFO] loading encodings...")
@@ -180,13 +186,31 @@ def log_visitor(person_id, recognised, confidence, snapshot=None):
     """, (person_id, recognised, confidence, snapshot))
     connection.commit()
 
-    # Create video filename with timestamp
+    # Create video filename with timestamp in recordings folder
     filename = os.path.join(
-        folder, f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        RECORDINGS_DIR, f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
     )
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(filename, fourcc, 20.0, (frame_width, frame_height))
+
+
+def make_web_compatible(video_path):
+    """Convert video to web-streaming format using ffmpeg"""
+    temp_path = video_path + ".temp.mp4"
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-i", video_path,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:a", "aac", "-movflags", "+faststart",
+            temp_path
+        ], check=True, capture_output=True)
+        os.replace(temp_path, video_path)
+        print(f"Converted {video_path} to web format")
+    except subprocess.CalledProcessError as e:
+        print(f"ffmpeg error: {e.stderr.decode()}")
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 print("Waiting for button press to start photo capture...")
@@ -255,6 +279,11 @@ def calculate_fps():
     return fps
 
 
+recording = False
+out = None
+recording_end_time = None
+visitor_name = None
+
 while True:
     # Capture a frame from camera
     frame = picam2.capture_array()
@@ -272,11 +301,38 @@ while True:
     cv2.putText(display_frame, f"FPS: {current_fps:.1f}", (display_frame.shape[1] - 150, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
+    # If recording, write frame and check if 15 seconds is up
+    if recording:
+        out.write(display_frame)
+        if time.time() >= recording_end_time:
+            out.release()
+            print(f"Recording finished. Converting to web format...")
+            make_web_compatible(recording_filename)
+            recording = False
+            
     # Display everything over the video feed.
     cv2.imshow('Video', display_frame)
 
+    # Check for button press to start recording
+    # GPIO.input returns 0 when button is pressed (pull-up)
+    if not recording and GPIO.input(BUTTON_PIN) == 0:
+        # Start recording for 15 seconds
+        visitor_name = "visitor"  # Default name
+        recording_filename = os.path.join(
+            RECORDINGS_DIR, f"{visitor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        )
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(recording_filename, fourcc, 20.0, (frame.shape[1], frame.shape[0]))
+        recording = True
+        recording_end_time = time.time() + 15  # Record for 15 seconds
+        print(f"Started recording to {recording_filename}")
+        time.sleep(0.5)  # Debounce button
+
     # Break the loop and stop the script if 'q' is pressed
     if cv2.waitKey(1) == ord("q"):
+        if recording:
+            out.release()
+            make_web_compatible(recording_filename)
         break
 
 duration = 10
