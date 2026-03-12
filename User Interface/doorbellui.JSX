@@ -3,7 +3,7 @@ import { useState, useRef } from "react";
 const [recordings, setRecordings] = useState([]);
 
 useEffect(() => {
-  fetch("http://<YOUR_PI_IP>:5000/api/recordings")
+  fetch("http://172.20.10.7:5000/api/recordings")
     .then(r => r.json())
     .then(data => setRecordings(data.map(r => ({
       id: r.id,
@@ -48,7 +48,7 @@ export default function DoorbellUI() {
   const saveName = async (name) => {
       if (!name.trim()) return;
 
-      await fetch("http://<YOUR_PI_IP>:5000/api/name-person", {
+      await fetch("http://172.20.10.7:5000/api/name-person", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
