@@ -1,4 +1,12 @@
-
+<h2>List of tasks</h2>
+<ul>
+<li>Connect peripherals</li><br>
+<li>Write scripts for speaker and microphone for two way communication</li><br>
+<li>Screenshots from video adding to UI</li><br>
+<li>Add manual facial recognition to UI</li><br>
+<li>Add database setting page to UI</li><br>
+<li>Live feed creation and addition to UI</li><br>
+</ul>
 
 <h2>Configuration settings</h2>
 
