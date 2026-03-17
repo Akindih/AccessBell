@@ -1,6 +1,6 @@
 <h2>List of tasks</h2>
 <ul>
-<li>Connect peripherals</li><br>
+<li>Connect peripherals</li>
 <li>Write scripts for speaker and microphone for two way communication</li>
 <li>Screenshots from video adding to UI</li>
 <li>Add manual facial recognition to UI</li>
