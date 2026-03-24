@@ -1,0 +1,10 @@
+List all audio devices:
+
+arecord -l # Recording devices
+
+aplay -l # Playback devices
+
+
+Show USB audio devices:
+
+lsusb | grep -i audio
