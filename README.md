@@ -26,3 +26,7 @@ https://core-electronics.com.au/guides/raspberry-pi/face-recognition-with-raspbe
 
 <p>
 https://www.raspberrypi.com/documentation/accessories/touch-display-2.html<br></p>
+
+<p>
+https://www.origin-ic.com/blog/raspberry-pi-with-a-usb-microphone-and-speaker/47748#heading-6 <br></p>
+
