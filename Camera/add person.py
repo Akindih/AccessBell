@@ -17,14 +17,24 @@ cursor = connection.cursor()
 # Insert person into DB
 def insert_person(full_name, relationship=None):
     cursor.execute("""
-        INSERT INTO known_person (full_name, relationship)
-        VALUES (%s, %s)
-        RETURNING person_id;
-    """, (full_name, relationship))
-    
-    person_id = cursor.fetchone()[0]
-    connection.commit()
-    return person_id
+    SELECT person_id FROM known_person
+    WHERE full_name = %s
+    """, (full_name,))
+    result = cursor.fetchone()
+    if result:
+        # If person already exists, reuse their face encodings and ID
+        person_id = result[0]
+
+    else:
+        cursor.execute("""
+            INSERT INTO known_person (full_name, relationship)
+            VALUES (%s, %s)
+            RETURNING person_id;
+        """, (full_name, relationship))
+
+        person_id = cursor.fetchone()[0]
+        connection.commit()
+        return person_id
 
 
 # Insert encoding into DB
@@ -51,8 +61,8 @@ except Exception as e:
 
 
 # Process one person's folder
-def process_person_folder(person_name, folder_path):
-    print(f"\nProcessing: {person_name}")
+def process_person_folder(PERSON_NAME, folder_path):
+    print(f"\nProcessing: {PERSON_NAME}")
     
     encodings = []
 
@@ -78,17 +88,17 @@ def process_person_folder(person_name, folder_path):
         encodings.append(encoding)
 
     if len(encodings) == 0:
-        print(f"No usable images for {person_name}")
+        print(f"No usable images for {PERSON_NAME}")
         return
 
     # Insert person into DB
-    person_id = insert_person(person_name)
+    person_id = insert_person(PERSON_NAME)
 
     # Insert encodings
     for enc in encodings:
         insert_encoding(person_id, enc)
 
-    print(f"Added {len(encodings)} encodings for {person_name} (person_id={person_id})")
+    print(f"Added {len(encodings)} encodings for {PERSON_NAME} (person_id={person_id})")
 
 
 # Dataset directory
@@ -102,11 +112,11 @@ if not os.path.isdir(DATASET_DIR):
 
 
 # Loop through dataset folders
-for person_name in os.listdir(DATASET_DIR):
-    folder_path = os.path.join(DATASET_DIR, person_name)
+for PERSON_NAME in os.listdir(DATASET_DIR):
+    folder_path = os.path.join(DATASET_DIR, PERSON_NAME)
 
     if os.path.isdir(folder_path):
-        process_person_folder(person_name, folder_path)
+        process_person_folder(PERSON_NAME, folder_path)
 
 
 # Close DB connection
