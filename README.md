@@ -2,6 +2,7 @@
 <ul>
 <li>Connect peripherals</li>
 <li>Write scripts for speaker and microphone for two way communication</li>
+<li>Capture Video and add to UI for later identification</li>
 <li>Screenshots from video adding to UI</li>
 <li>Add manual facial recognition to UI</li>
 <li>Add database setting page to UI</li>
