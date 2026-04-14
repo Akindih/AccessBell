@@ -10,6 +10,8 @@ import os
 import subprocess
 from datetime import datetime
 from itertools import count
+#import speech_recognition as sr
+
 
 # Directory where recordings are saved (must match appAPI.py)
 RECORDINGS_DIR = "/home/doorbellteam/FaceRec/doorbell_recordings"
@@ -30,7 +32,8 @@ GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 # Initialize the camera
 picam2 = Picamera2()
-picam2.configure(picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (1920, 1080)}))
+picam2.configure(picam2.create_preview_configuration(
+    main={"format": 'RGB888', "size": (1920, 1080)}))
 #picam2.configure(config)
 picam2.start()
 
@@ -105,12 +108,12 @@ def log_visitor(person_id, recognised, confidence, name="Unknown", snapshot=None
     connection.commit()
 
     # Create video filename with timestamp in recordings folder
-    filename = os.path.join(
-        RECORDINGS_DIR, f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-    )
+   # filename = os.path.join(
+        #RECORDINGS_DIR, f"{name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    #)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(filename, fourcc, 20.0, (frame_width, frame_height))
+    #fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    #out = cv2.VideoWriter(filename, fourcc, 20.0, (frame_width, frame_height))
 
 
 def make_web_compatible(video_path):
@@ -132,10 +135,21 @@ def make_web_compatible(video_path):
 
 
 print("Waiting for button press to start photo capture...")
-# wait for button press
-GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
-print("Button pressed, Starting live recognition.")
+print("Ready — press button to start recording...")
 
+# Initialize recognizer
+#r = sr.Recognizer()
+
+# Configure microphone
+# Use the device index found in arecord -l
+#mic = sr.Microphone(device_index=1) 
+
+#print("Listening...")
+#with mic as source:
+ #  r.adjust_for_ambient_noise(source)
+#audio = r.listen(source)
+
+#print("Processing...")
 
 def process_frame(frame):
     global face_locations, face_encodings, face_names
@@ -144,7 +158,7 @@ def process_frame(frame):
     resized_frame = cv2.resize(frame, (0, 0), fx=(1 / cv_scaler), fy=(1 / cv_scaler))
 
     # Convert the image from BGR to RGB colour space, the facial recognition library uses RGB, OpenCV uses BGR
-    rgb_resized_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
+    rgb_resized_frame = cv2.cvtColor(resized_frame, cv2.COLOR_RGB2BGR)
 
     # Find all the faces and face encodings in the current frame of video
     face_locations = face_recognition.face_locations(rgb_resized_frame)
@@ -224,58 +238,69 @@ out = None
 recording_end_time = None
 visitor_name = None
 
+print("[DEBUG] Entering main loop...")
+
+GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
+print("Button pressed! Starting display and recording...")
+
 while True:
-    # Capture a frame from camera
     frame = picam2.capture_array()
-
-    # Process the frame with the function
+    print("[DEBUG] Frame captured")
+    
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+    
     processed_frame = process_frame(frame)
-
-    # Get the text and boxes to be drawn based on the processed frame
     display_frame = draw_results(processed_frame)
 
-    # Calculate and update FPS
     current_fps = calculate_fps()
-
-    # Attach FPS counter to the text and boxes
     cv2.putText(display_frame, f"FPS: {current_fps:.1f}", (display_frame.shape[1] - 150, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-    # If recording, write frame and check if 15 seconds is up
-    if recording:
-        out.write(display_frame)
-        if time.time() >= recording_end_time:
-            out.release()
-            print(f"Recording finished. Converting to web format...")
-            make_web_compatible(recording_filename)
-            recording = False
-            
-    # Display everything over the video feed.
-    cv2.imshow('Video', display_frame)
+    # Check button
+    button_state = GPIO.input(BUTTON_PIN)
+    print(f"[DEBUG] Button state: {button_state} | Recording: {recording}")
 
-    # Check for button press to start recording
-    # GPIO.input returns 0 when button is pressed (pull-up)
-    if not recording and GPIO.input(BUTTON_PIN) == 0:
-        # Start recording for 15 seconds
-        visitor_name = "visitor"  # Default name
+    if not recording and button_state == 0:
+        print("[DEBUG] Button pressed! Starting recording...")
+        visitor_name = face_names[0] if face_names else "visitor"
         recording_filename = os.path.join(
             RECORDINGS_DIR, f"{visitor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
         )
+        print(f"[DEBUG] Saving to: {recording_filename}")
+        print(f"[DEBUG] Frame size: {frame_width}x{frame_height}")
+        
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        out = cv2.VideoWriter(recording_filename, fourcc, 20.0, (frame.shape[1], frame.shape[0]))
+        out = cv2.VideoWriter(recording_filename, fourcc, 20.0, (frame_width, frame_height))
+        
+        if not out.isOpened():
+            print("[ERROR] VideoWriter failed to open! Check path and codec.")
+        else:
+            print("[DEBUG] VideoWriter opened successfully")
+        
         recording = True
-        recording_end_time = time.time() + 15  # Record for 15 seconds
-        print(f"Started recording to {recording_filename}")
-        time.sleep(0.5)  # Debounce button
+        recording_end_time = time.time() + 20
+        time.sleep(0.5)
 
-    # Break the loop and stop the script if 'q' is pressed
-    if cv2.waitKey(1) == ord("q"):
-        if recording:
+    if recording:
+        if out and out.isOpened():
+            out.write(display_frame)
+            remaining = recording_end_time - time.time()
+            print(f"[DEBUG] Recording... {remaining:.1f}s remaining")
+        else:
+            print("[ERROR] out is not open during recording!")
+
+        if time.time() >= recording_end_time:
             out.release()
+            print(f"[DEBUG] Recording finished, converting...")
             make_web_compatible(recording_filename)
-        break
+            recording = False
+            out = None
 
-duration = 10
+    cv2.imshow('Video', display_frame)
+    cv2.waitKey(1) 
+    
+interval = 0.5
+duration = 20
 photo_count = 0
 end_time = time.time() + duration
 
@@ -283,6 +308,7 @@ print("Capturing photos after recognition")
 end_time = time.time() + duration
 while time.time() < end_time:
     frame = picam2.capture_array()
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     photo_count += 1
     cv2.imwrite(f"capture_{timestamp}.jpg", frame)
