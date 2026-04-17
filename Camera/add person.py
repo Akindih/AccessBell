@@ -3,6 +3,7 @@ import cv2
 import psycopg2
 import numpy as np
 import face_recognition
+import hashlib
 
 # PostgreSQL connection
 connection = psycopg2.connect(
@@ -40,13 +41,19 @@ def insert_person(full_name, relationship=None):
 # Insert encoding into DB
 def insert_encoding(person_id, encoding):
     binary_encoding = encoding.tobytes()
-    
+    encoding_hash = hashlib.sha256(binary_encoding).hexdigest()
+
     cursor.execute("""
-        INSERT INTO face_encoding (person_id, encoding)
-        VALUES (%s, %s);
-    """, (person_id, binary_encoding))
-    
-    connection.commit()
+        SELECT 1 FROM face_encoding
+        WHERE person_id = %s AND encoding_hash = %s
+    """, (person_id, encoding_hash))
+
+    if not cursor.fetchone():
+        cursor.execute("""
+            INSERT INTO face_encoding (person_id, encoding, encoding_hash)
+            VALUES (%s, %s, %s)
+        """, (person_id, binary_encoding, encoding_hash))
+        connection.commit()
 
 
 # Optional dataset check
