@@ -173,11 +173,17 @@ GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
 print("[INFO] Button pressed — opening window and starting recording.")
 
 # Build output filename before the loop
-visitor_name       = "visitor"          # updated once faces are detected
+print("[INFO] Ready — waiting for button press...")
+GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
+print("[INFO] Button pressed — opening window and starting recording.")
+
+# Build output filenames
+visitor_name       = "visitor" ###########
 recording_filename = os.path.join(
     RECORDINGS_DIR,
     f"{visitor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
 )
+audio_filename = recording_filename.replace(".mp4", "_audio.wav")
 
 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 out    = cv2.VideoWriter(recording_filename, fourcc, 20.0, (FRAME_WIDTH, FRAME_HEIGHT))
@@ -187,7 +193,16 @@ if not out.isOpened():
 else:
     print(f"[INFO] Recording to: {recording_filename}")
 
-recording_end_time = time.time() + RECORDING_SECONDS
+# Start audio recording in background
+stop_audio   = threading.Event()
+audio_thread = threading.Thread(
+    target=record_audio,
+    args=(audio_filename, RECORDING_SECONDS, stop_audio),
+    daemon=True
+)
+audio_thread.start()
+
+recording_end_time = time.time() + RECORDING_SECONDS ####
 
 while True:
     frame = picam2.capture_array()
