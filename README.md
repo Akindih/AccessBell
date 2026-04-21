@@ -1,4 +1,13 @@
-
+<h2>List of tasks</h2>
+<ul>
+<li>Connect peripherals</li>
+<li>Write scripts for speaker and microphone for two way communication</li>
+<li>Capture Video and add to UI for later identification</li>
+<li>Screenshots from video adding to UI</li>
+<li>Add manual facial recognition to UI</li>
+<li>Add database setting page to UI</li>
+<li>Live feed creation and addition to UI</li>
+</ul>
 
 <h2>Configuration settings</h2>
 
@@ -18,3 +27,7 @@ https://core-electronics.com.au/guides/raspberry-pi/face-recognition-with-raspbe
 
 <p>
 https://www.raspberrypi.com/documentation/accessories/touch-display-2.html<br></p>
+
+<p>
+https://www.origin-ic.com/blog/raspberry-pi-with-a-usb-microphone-and-speaker/47748#heading-6 <br></p>
+

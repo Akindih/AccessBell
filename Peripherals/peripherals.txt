@@ -1,0 +1,32 @@
+List all audio devices:
+
+arecord -l # Recording devices
+
+aplay -l # Playback devices
+
+
+Show USB audio devices:
+
+lsusb | grep -i audio
+
+
+
+pcm.!default {
+    type asym
+    capture.pcm "mic"
+    playback.pcm "speaker"
+}
+
+pcm.mic {
+    type plug
+    slave {
+        pcm "hw:1,0" # Change to your USB Mic card/device
+    }
+}
+
+pcm.speaker {
+    type plug
+    slave {
+        pcm "hw:0,0" # Change to your Speaker card/device
+    }
+}

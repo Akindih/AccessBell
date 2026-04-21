@@ -1,0 +1,6 @@
+Seeing available recording devices: arecord -l 
+
+Configuration file: nano ~/.asoundrc
+
+Changing microphone settings: alsamixer
+
