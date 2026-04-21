@@ -77,22 +77,29 @@ def log_visitor(person_id, recognised, confidence, snapshot=None):
     connection.commit()
 
 
-def make_web_compatible(video_path):
-    """Re-encode with ffmpeg so browsers can stream the file."""
+def make_web_compatible(video_path, audio_path=None): ##################
+    """Re-encode with ffmpeg, merging audio if provided."""
     temp_path = video_path + ".temp.mp4"
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", video_path,
-             "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-             "-c:a", "aac", "-movflags", "+faststart", temp_path],
-            check=True, capture_output=True
-        )
+        cmd = ["ffmpeg", "-y", "-i", video_path]
+        if audio_path and os.path.exists(audio_path):
+            cmd += ["-i", audio_path]
+        cmd += [
+            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
+            temp_path
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
         os.replace(temp_path, video_path)
+        if audio_path and os.path.exists(audio_path):
+            os.remove(audio_path)   # clean up temp wav
         print(f"[INFO] Converted {video_path} to web format.")
     except subprocess.CalledProcessError as e:
         print(f"[ERROR] ffmpeg failed: {e.stderr.decode()}")
         if os.path.exists(temp_path):
-            os.remove(temp_path)
+            os.remove(temp_path) ########################
+
 
 
 def process_frame(frame):
