@@ -94,6 +94,7 @@ def log_visitor(person_id, recognised, confidence, snapshot=None):
 
 def record_audio(output_path,duration,stop_event):
     p=pyaudio.PyAudio()
+    sample_width = p.get_sample_size(AUDIO_FORMAT)  # ← captured first, while p is alive
     stream =p.open(
     format = AUDIO_FORMAT,
     channels=AUDIO_CHANNELS,
@@ -107,19 +108,19 @@ def record_audio(output_path,duration,stop_event):
         frames.append(stream.read(AUDIO_CHUNK,exception_on_overflow=False))
     print(f"AUDIO LOOP ENDED,captured {len(frames)} frames")
     
-    sample_width = p.get_sample_size(AUDIO_FORMAT)  # ← captured first, while p is alive
+    #sample_width = p.get_sample_size(AUDIO_FORMAT)  # was originally placed here
     stream.stop_stream()
     stream.close()
-p.terminate()                                    # ← safe now, value already saved
+    p.terminate()                                    # ← safe now, value already saved
     
-    print("writing wav to: {output_path}")
+    print(f"writing wav to: {output_path}")
     with wave.open(output_path, "wb") as wf:
         wf.setnchannels(AUDIO_CHANNELS)
         wf.setsamplewidth(sample_width)
         wf.setframerate(AUDIO_RATE)
         wf.writeframes(b"".join(frames))
 
-    print(f"AUDIO SAVED :{output_path}")
+    print(f"AUDIO SAVED: {output_path}")
 #except Exception as e:
     #print("Audio Thread Failed")
 def make_web_compatible(video_path, audio_path=None): ##################
@@ -283,14 +284,17 @@ while True:
 # ── Cleanup ───────────────────────────────────────────────────────────────────
 out.release()
 cv2.destroyAllWindows()
-picam2.stop()
-GPIO.cleanup()
 
 # Signal audio to stop, then WAIT for WAV to be fully written before merging
 stop_audio.set()
 print("[INFO] Waiting for audio thread to finish...")
-audio_thread.join()   # ← blocks here until WAV headers are flushed to disk
+audio_thread.join(timeout=10)   # ← blocks here until WAV headers are flushed to disk
 
+if audio_thread.is_alive():
+    print("[WARNING]Audio did not finish in time - WAV may not work")
+
+picam2.stop()
+GPIO.cleanup()
 cursor.close()
 connection.close()
 
