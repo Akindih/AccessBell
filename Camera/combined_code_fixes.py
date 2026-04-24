@@ -8,45 +8,50 @@ import RPi.GPIO as GPIO
 import pickle
 import os
 import subprocess
-import atexit
 from datetime import datetime
+import pyaudio
+import wave
+import threading
 
-# Directory where recordings are saved (must match appAPI.py)
+# ── Directories ────────────────────────────────────────────────────────────────
 RECORDINGS_DIR = "/home/doorbellteam/FaceRec/doorbell_recordings"
-if not os.path.exists(RECORDINGS_DIR):
-    os.makedirs(RECORDINGS_DIR)
+os.makedirs(RECORDINGS_DIR, exist_ok=True)
 
-# Load pre-trained face encodings
-print("[INFO] loading encodings...")
+# ── Load encodings from pickle ─────────────────────────────────────────────────
+print("[INFO] Loading encodings from pickle...")
 with open("encodings.pickle", "rb") as f:
     data = pickle.loads(f.read())
-known_face_encodings = data["encodings"]
-known_face_names = data["names"]
+known_face_encodings = data["encodings"]   # used by compare_faces
+known_face_names     = data["names"]
 
-# GPIO setup
+# ── GPIO ───────────────────────────────────────────────────────────────────────
 BUTTON_PIN = 26
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(BUTTON_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-atexit.register(GPIO.cleanup)
 
-# Initialize the camera
+# ── Camera ─────────────────────────────────────────────────────────────────────
+FRAME_WIDTH  = 1920
+FRAME_HEIGHT = 1080
+
 picam2 = Picamera2()
-picam2.configure(picam2.create_preview_configuration(main={"format": 'XRGB8888', "size": (1920, 1080)}))
+config = picam2.create_preview_configuration(
+    main={"format": "RGB888", "size": (FRAME_WIDTH, FRAME_HEIGHT)}
+)
+picam2.configure(config)
+picam2.set_controls({
+    "AwbMode": 1,
+    "AwbEnable": True,
+    })
 picam2.start()
+time.sleep(2)
 
-# Initialize our variables
-cv_scaler = 4
+# ── Audio ─────────────────────────────────────────────────────────────────────
+AUDIO_RATE = 44100
+AUDIO_CHANNELS = 1
+AUDIO_CHUNK = 1024
+AUDIO_FORMAT= pyaudio.paInt16
 
-face_locations = []
-face_encodings = []
-face_names = []
-frame_count = 0
-start_time = time.time()
-fps = 0
-frame_width = 1920
-frame_height = 1080
-
-# PostgreSQL connection
+# ── PostgreSQL ─────────────────────────────────────────────────────────────────
 connection = psycopg2.connect(
     host="localhost",
     database="smart_doorbell",
@@ -55,110 +60,130 @@ connection = psycopg2.connect(
 )
 cursor = connection.cursor()
 
-
-def create_folder(name):
-    dataset_folder = "dataset"
-    if not os.path.exists(dataset_folder):
-        os.makedirs(dataset_folder)
-    person_folder = os.path.join(dataset_folder, name)
-    if not os.path.exists(person_folder):
-        os.makedirs(person_folder)
-    return person_folder
-
-
-# Load encodings from PostgreSQL
+# ── Load DB encodings (used for distance matching) ─────────────────────────────
 def load_encodings():
-    cursor.execute("""
-        SELECT person_id, encoding
-        FROM face_encoding;
-    """)
+    cursor.execute("SELECT person_id, encoding FROM face_encoding;")
     rows = cursor.fetchall()
-
-    known_encodings = []
-    known_ids = []
-
+    known_encodings, known_ids = [], []
     for person_id, binary_encoding in rows:
         enc = np.frombuffer(binary_encoding, dtype=np.float64)
         known_encodings.append(enc)
         known_ids.append(person_id)
-    print(f"Loaded {len(known_encodings)} encodings from DB.")
+    print(f"[INFO] Loaded {len(known_encodings)} encodings from DB.")
     return known_encodings, known_ids
 
-
 known_encodings, known_ids = load_encodings()
-print(f"Loaded {len(known_encodings)} face encodings from database.")
+
+# ── Globals ────────────────────────────────────────────────────────────────────
+cv_scaler     = 4
+face_locations = []
+face_names     = []
+frame_count    = 0
+start_time     = time.time()
+fps            = 0
 
 
-# Cooldown tracker to prevent flooding visitor_log
-last_logged = {}
-
-
-# Log visitor into visitor_log table
-def log_visitor(person_id, recognised, confidence, name="Unknown", snapshot=None):
-    now = time.time()
-    key = person_id or "unknown"
-    if key in last_logged and now - last_logged[key] < 30:
-        return
-    last_logged[key] = now
-
-    cursor.execute("""
-        INSERT INTO visitor_log (person_id, recognised, confidence, snapshot)
-        VALUES (%s, %s, %s, %s);
-    """, (person_id, recognised, confidence, snapshot))
+# ── Helpers ────────────────────────────────────────────────────────────────────
+def log_visitor(person_id, recognised, confidence, snapshot=None):
+    cursor.execute(
+        "INSERT INTO visitor_log (person_id, recognised, confidence, snapshot) "
+        "VALUES (%s, %s, %s, %s);",
+        (person_id, recognised, confidence, snapshot)
+    )
     connection.commit()
 
+def record_audio(output_path,duration,stop_event):
+    p=pyaudio.PyAudio()
+    stream =p.open(
+    format = AUDIO_FORMAT,
+    channels=AUDIO_CHANNELS,
+    rate=AUDIO_RATE,
+    input=True,
+    frames_per_buffer=AUDIO_CHUNK
+    )
+    frames=[]
+    print("AUDIO RECORDING STARTED")
+    while not stop_event.is_set():
+        frames.append(stream.read(AUDIO_CHUNK,exception_on_overflow=False))
+    print(f"AUDIO LOOP ENDED,captured {len(frames)} frames")
+    
+    sample_width = p.get_sample_size(AUDIO_FORMAT)  # ← captured first, while p is alive
+    stream.stop_stream()
+    stream.close()
+p.terminate()                                    # ← safe now, value already saved
+    
+    print("writing wav to: {output_path}")
+    with wave.open(output_path, "wb") as wf:
+        wf.setnchannels(AUDIO_CHANNELS)
+        wf.setsamplewidth(sample_width)
+        wf.setframerate(AUDIO_RATE)
+        wf.writeframes(b"".join(frames))
 
-def make_web_compatible(video_path):
-    """Convert video to web-streaming format using ffmpeg"""
+    print(f"AUDIO SAVED :{output_path}")
+#except Exception as e:
+    #print("Audio Thread Failed")
+def make_web_compatible(video_path, audio_path=None): ##################
+    """Re-encode with ffmpeg, merging audio if provided."""
     temp_path = video_path + ".temp.mp4"
     try:
-        subprocess.run([
-            "ffmpeg", "-y", "-i", video_path,
+        cmd = ["ffmpeg", "-y", "-i", video_path]
+        if audio_path and os.path.exists(audio_path):
+            cmd += ["-i", audio_path]
+        cmd += [
             "-c:v", "libx264", "-preset", "fast", "-crf", "22",
-            "-c:a", "aac", "-movflags", "+faststart",
+            "-c:a", "aac",
+            "-movflags", "+faststart",
             temp_path
-        ], check=True, capture_output=True)
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
         os.replace(temp_path, video_path)
-        print(f"Converted {video_path} to web format")
+        if audio_path and os.path.exists(audio_path):
+            os.remove(audio_path)   # clean up temp wav
+        print(f"[INFO] Converted {video_path} to web format.")
     except subprocess.CalledProcessError as e:
-        print(f"ffmpeg error: {e.stderr.decode()}")
+        print(f"[ERROR] ffmpeg failed: {e.stderr.decode()}")
         if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-
-print("Waiting for button press to start recognition...")
-GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
-print("Button pressed, Starting live recognition.")
+            os.remove(temp_path) ########################
 
 
 def process_frame(frame):
-    global face_locations, face_encodings, face_names
+    """Detect faces, match against DB encodings, log results."""
+    global face_locations, face_names
 
-    resized_frame = cv2.resize(frame, (0, 0), fx=(1 / cv_scaler), fy=(1 / cv_scaler))
-    rgb_resized_frame = cv2.cvtColor(resized_frame, cv2.COLOR_BGR2RGB)
+    resized        = cv2.resize(frame, (0, 0), fx=1/cv_scaler, fy=1/cv_scaler)
+    rgb_resized    = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)   # face_recognition wants RGB
 
-    face_locations = face_recognition.face_locations(rgb_resized_frame)
-    face_encodings = face_recognition.face_encodings(rgb_resized_frame, face_locations, model='large')
+    face_locations = face_recognition.face_locations(rgb_resized)
+    face_encodings = face_recognition.face_encodings(rgb_resized, face_locations, model="large")
 
     face_names = []
 
     for face_encoding in face_encodings:
-        face_distances = face_recognition.face_distance(known_encodings, face_encoding)
-        best_match_index = np.argmin(face_distances)
-        recognised = face_distances[best_match_index] < 0.6
-        name = known_face_names[best_match_index] if recognised else "Unknown"
-        person_id = known_ids[best_match_index] if recognised else None
+        name       = "Unknown"
+        person_id  = None
+        recognised = False
 
-        confidence = 1 - face_distances[best_match_index]
+        if known_face_encodings:
+            # compare_faces and face_distance must use the SAME list
+            matches        = face_recognition.compare_faces(known_face_encodings, face_encoding)
+            face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+            best_idx       = int(np.argmin(face_distances))
 
-        log_visitor(person_id, recognised, float(confidence), name=name)
+            if matches[best_idx]:
+                name       = known_face_names[best_idx]
+                recognised = True
+                # Map pickle index → DB person_id (lists are same length and order)
+                if best_idx < len(known_ids):
+                    person_id = known_ids[best_idx]
+
+        confidence = float(1 - face_distances[best_idx]) if known_face_encodings else 0.0
+        log_visitor(person_id, recognised, confidence)
 
         if recognised and person_id is not None:
-            cursor.execute("""
-                UPDATE known_person
-                SET last_seen = NOW()
-                WHERE person_id = %s;
-            """, (person_id,))
+            cursor.execute(
+                "UPDATE known_person SET last_seen = NOW() WHERE person_id = %s;",
+                (person_id,)
+            )
             connection.commit()
 
         face_names.append(name)
@@ -168,92 +193,125 @@ def process_frame(frame):
 
 def draw_results(frame):
     for (top, right, bottom, left), name in zip(face_locations, face_names):
-        top *= cv_scaler
-        right *= cv_scaler
+        top    *= cv_scaler
+        right  *= cv_scaler
         bottom *= cv_scaler
-        left *= cv_scaler
+        left   *= cv_scaler
 
         cv2.rectangle(frame, (left, top), (right, bottom), (244, 42, 3), 3)
         cv2.rectangle(frame, (left - 3, top - 35), (right + 3, top), (244, 42, 3), cv2.FILLED)
-        font = cv2.FONT_HERSHEY_DUPLEX
-        cv2.putText(frame, name, (left + 6, top - 6), font, 1.0, (255, 255, 255), 1)
-
+        cv2.putText(frame, name, (left + 6, top - 6),
+                    cv2.FONT_HERSHEY_DUPLEX, 1.0, (255, 255, 255), 1)
     return frame
 
 
 def calculate_fps():
     global frame_count, start_time, fps
     frame_count += 1
-    elapsed_time = time.time() - start_time
-    if elapsed_time > 1:
-        fps = frame_count / elapsed_time
+    elapsed = time.time() - start_time
+    if elapsed > 1:
+        fps        = frame_count / elapsed
         frame_count = 0
-        start_time = time.time()
+        start_time  = time.time()
     return fps
 
 
-recording = False
-out = None
-recording_end_time = None
-recording_filename = None
-visitor_name = None
+# ── Main ───────────────────────────────────────────────────────────────────────
+RECORDING_SECONDS = 30
+
+print("[INFO] Ready — waiting for button press...")
+GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
+print("[INFO] Button pressed — opening window and starting recording.")
+
+# Build output filename before the loop
+timestamp_str     = datetime.now().strftime('%Y%m%d_%H%M%S')
+visitor_name      = "visitor"
+raw_video_path    = os.path.join(RECORDINGS_DIR, f"visitor_{timestamp_str}_raw.avi")
+raw_audio_path    = os.path.join(RECORDINGS_DIR, f"visitor_{timestamp_str}_audio.wav")
+final_output_path = os.path.join(RECORDINGS_DIR, f"visitor_{timestamp_str}.mp4")
+ 
+fourcc = cv2.VideoWriter_fourcc(*"XVID")  # more reliable than mp4v for raw recording
+out    = cv2.VideoWriter(raw_video_path, fourcc, 20.0, (FRAME_WIDTH, FRAME_HEIGHT))
+ 
+if not out.isOpened():
+    print("[ERROR] VideoWriter failed to open — check codec and path.")
+else:
+    print(f"[INFO] Recording video to: {raw_video_path}")
+ 
+# Start audio — daemon=False so the WAV is fully written before ffmpeg runs
+stop_audio   = threading.Event()
+audio_thread = threading.Thread(
+    target=record_audio,
+    args=(raw_audio_path, RECORDING_SECONDS, stop_audio),
+    daemon=False  # ← critical, was True which caused the ffmpeg error
+)
+audio_thread.start()
+
+recording_end_time = time.time() + RECORDING_SECONDS ####
 
 while True:
     frame = picam2.capture_array()
-
-    # ADDED: print frame shape on first frame to confirm dimensions
-    if frame_count == 0:
-        print(f"Frame shape: {frame.shape}")
+    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
 
     processed_frame = process_frame(frame)
-    display_frame = draw_results(processed_frame)
+    display_frame   = draw_results(processed_frame)
+
+    # Update visitor name from first recognised face (for logging context)
+    if face_names and face_names[0] != "Unknown":
+        visitor_name = face_names[0]
 
     current_fps = calculate_fps()
-    cv2.putText(display_frame, f"FPS: {current_fps:.1f}", (display_frame.shape[1] - 150, 30),
+    cv2.putText(display_frame, f"FPS: {current_fps:.1f}",
+                (display_frame.shape[1] - 150, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-    # If recording, write frame and check if 15 seconds is up
-    if recording:
-        bgr_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGRA2BGR)
-        out.write(bgr_frame)
-        print(f"Recording... {int(recording_end_time - time.time())}s remaining")
-        if time.time() >= recording_end_time:
-            out.release()
-            out = None
-            print(f"Recording finished. Converting to web format...")
-            make_web_compatible(recording_filename)
-            print(f"Video saved to: {recording_filename}")
-            recording = False
+    remaining = max(0, recording_end_time - time.time())
+    cv2.putText(display_frame, f"REC {remaining:.0f}s",
+                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-    cv2.imshow('Video', display_frame)
+    cv2.imshow("Doorbell", display_frame)
+    cv2.waitKey(1)
 
-    # Button press starts a 15 second recording
-    if not recording and GPIO.input(BUTTON_PIN) == 0:
-        visitor_name = face_names[0] if face_names else "unknown"
-        recording_filename = os.path.join(
-            RECORDINGS_DIR, f"{visitor_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-        )
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    if out and out.isOpened():
+        out.write(display_frame)
 
-        # ADDED: convert frame to BGR first to get correct dimensions
-        test_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-        h, w = test_bgr.shape[:2]
-        print(f"Starting recording at {w}x{h}")
-
-        out = cv2.VideoWriter(recording_filename, fourcc, 20.0, (w, h))
-        recording = True
-        recording_end_time = time.time() + 15
-        print(f"Started recording to {recording_filename}")
-        time.sleep(0.5)
-
-    if cv2.waitKey(1) == ord("q"):
-        if recording and out:
-            out.release()
-            make_web_compatible(recording_filename)
+    # Stop after 30 seconds
+    if time.time() >= recording_end_time:
+        print("[INFO] Recording complete.")
         break
 
-# Cleanup
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+out.release()
 cv2.destroyAllWindows()
 picam2.stop()
+GPIO.cleanup()
+
+# Signal audio to stop, then WAIT for WAV to be fully written before merging
+stop_audio.set()
+print("[INFO] Waiting for audio thread to finish...")
+audio_thread.join()   # ← blocks here until WAV headers are flushed to disk
+
 cursor.close()
 connection.close()
+
+# ── Merge audio + video into one .mp4 ─────────────────────────────────────────
+print("[INFO] Merging audio and video into single file...")
+try:
+    subprocess.run([
+        "ffmpeg", "-y",
+        "-i", raw_video_path,   # video stream
+        "-i", raw_audio_path,   # audio stream
+        "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+        "-c:a", "aac",
+        "-movflags", "+faststart",  # makes it streamable in browser
+        "-shortest",                # trim to whichever stream ends first
+        final_output_path,          # ← single merged .mp4
+    ], check=True, capture_output=True)
+
+    # Clean up the two temp files now that we have the merged one
+    os.remove(raw_video_path)
+    os.remove(raw_audio_path)
+    print(f"[INFO] ✅ Saved merged file: {final_output_path}")
+
+except subprocess.CalledProcessError as e:
+    print(f"[ERROR] ffmpeg merge failed: {e.stderr.decode()}")
