@@ -9,11 +9,25 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "chart.js": "^4.5.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "vite": "^5.4.2"
-  }
+  },
+  "description": "<h2>List of tasks</h2>\r <ul>\r <li>Connect peripherals</li>\r <li>Write scripts for speaker and microphone for two way communication</li>\r <li>Capture Video and add to UI for later identification</li>\r <li>Screenshots from video adding to UI</li>\r <li>Add manual facial recognition to UI</li>\r <li>Add database setting page to UI</li>\r <li>Live feed creation and addition to UI</li>\r </ul>",
+  "main": "vite.config.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Akindih/AccessBell.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Akindih/AccessBell/issues"
+  },
+  "homepage": "https://github.com/Akindih/AccessBell#readme"
 }
