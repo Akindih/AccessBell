@@ -42,7 +42,35 @@ def health():
         "latest_recording": os.path.basename(files[0]) if files else None,
     })
 
-@app.route("/api/recordings")
+@app.route("/api/recordings")from flask import Flask, jsonify, request, send_from_directory, abort
+import os, glob, datetime
+
+app = Flask(__name__)
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    return response
+
+RECORDINGS_DIR = os.getenv("DOORBELL_RECORDINGS_DIR", "/home/doorbellteam/FaceRec/doorbell_recordings")
+VIDEO_EXTENSIONS = ("*.mp4", "*.avi", "*.mov", "*.mkv", "*.h264")
+
+
+def list_recording_files():
+    files = []
+    for pattern in VIDEO_EXTENSIONS:
+        files.extend(glob.glob(os.path.join(RECORDINGS_DIR, pattern)))
+    return sorted(files, key=os.path.getmtime, reverse=True)
+
+
+@app.route("/")
+def root():
+    return jsonify({
+        "ok": True,
+        "message": "Doorbell API is running",
+        "recordings_dir": RECORDINGS_DI
 def get_recordings():
     if not os.path.isdir(RECORDINGS_DIR):
         return jsonify({
@@ -72,7 +100,7 @@ def get_video(filename):
     if not os.path.isfile(file_path):
         abort(404)
 
-    return send_from_directory(RECORDINGS_DIR, safe_name, as_attachment=False, conditional=True)
+    return send_from_directory(RECORDINGS_DIR, safe_name, as_attachment=False)
 
 @app.route("/api/name-person", methods=["POST"])
 def name_person():
@@ -80,6 +108,7 @@ def name_person():
     print(f"Naming person in {data['video_filename']} as {data['name']}")
     # TODO: save to a DB or JSON file, trigger face training, etc.
     return jsonify({"status": "ok"})
+
 
 #Frequency per person
 @app.route("/api/visit-frequency", methods=["GET"])
@@ -163,7 +192,15 @@ def visits_over_time():
     return jsonify([
         {"day": str(r[0]), "visits": r[1]}
         for r in rows
-    ])
+
+@app.get("/visitor")
+def get_visitor():
+    if main.current_visitor_profile is None:
+        return {"visitor": None}
+    return {"visitor": main.current_visitor_profile}
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    print(f"RECORDINGS_DIR = {RECORDINGS_DIR}")
+    print(f"Dir exists: {os.path.isdir(RECORDINGS_DIR)}")
+    print(f"Files found: {list_recording_files()}")
+    app.run(host="0.0.0.0", port=5000)                                                                               
