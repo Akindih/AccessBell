@@ -73,13 +73,22 @@ def recognition_worker(frame_queue, stop_event):
                     best_idx = np.argmin(face_distances)
                     if matches[best_idx]:
                         name = known_face_names[best_idx]
+                        person_id = known_ids_map.get(best_idx)
+                        relationship = get_relationship(person_id)
                         # Database logging (Once per name per session)
                         if name not in last_logged_names:
                             log_to_db(name, best_idx, float(1 - face_distances[best_idx]))
                             last_logged_names.add(name)
                 names.append(name)
             
-            recognition_results = {"names": names, "locations": face_locations}
+            #recognition_results = {"names": names, "locations": face_locations}
+            name = f"{name} ({relationship})"
+
+
+def get_relationship(person_id):
+    cursor.execute("SELECT relationship FROM known_person WHERE person_id = %s;", (person_id,))
+    row = cursor.fetchone()
+    return row[0] if row else "Unknown"
 
 def log_to_db(name, idx, confidence):
     try:
