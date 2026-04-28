@@ -1,69 +1,31 @@
-import { useEffect, useRef, useState } from "react";
+import { useState, useRef } from "react";
+import VisitorCard from "../src/VisitorCard.jsx";
 
-const API_BASE = "http://172.20.10.7:5000";
+const [recordings, setRecordings] = useState([]);
+
+useEffect(() => {
+  fetch("http://172.20.10.7:5000/api/recordings")
+    .then(r => r.json())
+    .then(data => setRecordings(data.map(r => ({
+      id: r.id,
+      timestamp: r.timestamp,
+      duration: "—",
+      faces: [],   // face detection can be added later
+      tagged: false,
+      filename: r.filename,
+    }))));
+}, []);
+
 const knownPeople = ["Sarah", "James", "Margaret", "Tom", "Delivery Person", "Neighbour"];
 
-function normalizeRecording(recording) {
-  return {
-    id: recording.id,
-    timestamp: recording.timestamp,
-    duration: recording.duration || "—",
-    faces: Array.isArray(recording.faces) ? recording.faces : [],
-    tagged: Array.isArray(recording.faces) ? recording.faces.every(face => face.name) : false,
-    filename: recording.filename,
-    video_url: recording.video_url || null,
-  };
-}
-
 export default function DoorbellUI() {
-  const [recordings, setRecordings] = useState([]);
+  const [recordings, setRecordings] = useState(mockRecordings);
   const [selected, setSelected] = useState(null);
   const [selectedFace, setSelectedFace] = useState(null);
   const [nameInput, setNameInput] = useState("");
   const [step, setStep] = useState("list");
   const [toast, setToast] = useState(null);
-  const [error, setError] = useState(null);
-  const [loading, setLoading] = useState(true);
   const inputRef = useRef();
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadRecordings() {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const response = await fetch(`${API_BASE}/api/recordings`);
-        if (!response.ok) {
-          throw new Error(`Unable to load recordings (${response.status})`);
-        }
-
-        const data = await response.json();
-        if (cancelled) return;
-
-        const normalized = Array.isArray(data) ? data.map(normalizeRecording) : [];
-        setRecordings(normalized);
-        setSelected(current => {
-          if (!current) return null;
-          return normalized.find(recording => recording.filename === current.filename) || null;
-        });
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load recordings");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    loadRecordings();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -87,7 +49,7 @@ export default function DoorbellUI() {
   const saveName = async (name) => {
       if (!name.trim()) return;
 
-      const response = await fetch(`${API_BASE}/api/name-person`, {
+      await fetch("http://172.20.10.7:5000/api/name-person", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -95,10 +57,6 @@ export default function DoorbellUI() {
           name: name.trim(),
         }),
       });
-
-      if (!response.ok) {
-        throw new Error(`Failed to save name (${response.status})`);
-      }
 
       // Update UI state as before
       const updated = recordings.map(rec => {
@@ -112,35 +70,18 @@ export default function DoorbellUI() {
       setSelected(updated.find(r => r.id === selected.id));
       showToast(`✓ ${name} saved & added to dataset!`);
       setStep("video");
-  };
+};
 
   const untaggedCount = recordings.filter(r => r.faces.some(f => !f.name)).length;
-  const selectedVideoUrl = selected?.video_url ? `${API_BASE}${selected.video_url}` : null;
 
   // ── STEP 1: Recording List ──────────────────────────────────────────────
   if (step === "list") return (
     <Page>
       <TopBar title="🔔  My Doorbell" />
 
-      {error && (
-        <div style={{
-          background: "#FEE2E2", borderLeft: "6px solid #DC2626",
-          padding: "18px 28px", fontSize: 18, color: "#991B1B",
-          fontWeight: 700, lineHeight: 1.5,
-        }}>
-          Could not load recordings: {error}
-        </div>
-      )}
-
-      {loading && (
-        <div style={{
-          background: "#EEF2FF", borderLeft: "6px solid #4F46E5",
-          padding: "18px 28px", fontSize: 18, color: "#3730A3",
-          fontWeight: 700, lineHeight: 1.5,
-        }}>
-          Loading recordings from Raspberry Pi...
-        </div>
-      )}
+      <div style={{ margin: "20px 28px" }}>
+        <VisitorCard />
+      </div>
 
       {untaggedCount > 0 && (
         <div style={{
@@ -157,14 +98,6 @@ export default function DoorbellUI() {
         <p style={{ fontSize: 19, color: "#555", marginBottom: 24, lineHeight: 1.7 }}>
           Tap on a video to see who visited your door and give them a name.
         </p>
-        {!loading && recordings.length === 0 && (
-          <div style={{
-            background: "white", borderRadius: 18, padding: 24,
-            border: "2px solid #E5E7EB", color: "#6B7280", fontSize: 18,
-          }}>
-            No recordings were returned by the Raspberry Pi server.
-          </div>
-        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {recordings.map(rec => {
             const unknownCount = rec.faces.filter(f => !f.name).length;
@@ -231,6 +164,7 @@ export default function DoorbellUI() {
           📅 {selected.timestamp} &nbsp;·&nbsp; {selected.duration}
         </div>
 
+        {/* Video mockup */}
         <div style={{
           position: "relative", width: "100%", aspectRatio: "16/9",
           background: "linear-gradient(160deg, #1c2a3a, #0e1825)",
@@ -239,27 +173,29 @@ export default function DoorbellUI() {
           marginBottom: 24,
           boxShadow: "0 6px 28px rgba(0,0,0,0.18)",
         }}>
-          {selectedVideoUrl ? (
-            <video
-              key={selectedVideoUrl}
-              controls
-              preload="metadata"
-              style={{ width: "100%", height: "100%", objectFit: "contain", background: "#000" }}
-            >
-              <source src={selectedVideoUrl} />
-              Your browser does not support this video.
-            </video>
-          ) : (
+          <div style={{
+            position: "absolute", top: "15%", left: "38%", width: "24%", height: "78%",
+            background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: "6px 6px 0 0",
+          }} />
+          <div style={{
+            position: "absolute", top: 14, left: 16, fontSize: 13,
+            color: "rgba(255,255,255,0.5)", fontFamily: "monospace",
+          }}>
+            {selected.timestamp}
+          </div>
+
+          {selected.faces.length === 0 && (
             <div style={{
               position: "absolute", inset: 0,
               display: "flex", alignItems: "center", justifyContent: "center",
-              color: "rgba(255,255,255,0.5)", fontSize: 20, fontWeight: 700,
+              color: "rgba(255,255,255,0.35)", fontSize: 20, fontWeight: 600,
             }}>
-              No video URL available for this clip
+              No faces were detected in this clip
             </div>
           )}
 
-          {selected.faces.map((face) => (
+          {selected.faces.map((face, i) => (
             <button key={face.id} onClick={() => pickFace(face)} style={{
               position: "absolute",
               left: `${face.x}%`, top: `${face.y}%`,
@@ -273,6 +209,10 @@ export default function DoorbellUI() {
               onMouseEnter={e => e.currentTarget.style.transform = "scale(1.04)"}
               onMouseLeave={e => e.currentTarget.style.transform = ""}
             >
+              <div style={{
+                position: "absolute", top: "15%", left: "20%", right: "20%", bottom: "5%",
+                background: "rgba(255,255,255,0.07)", borderRadius: "50% 50% 40% 40%",
+              }} />
               <div style={{
                 position: "absolute", top: "calc(100% + 7px)", left: "50%",
                 transform: "translateX(-50%)",
