@@ -81,5 +81,89 @@ def name_person():
     # TODO: save to a DB or JSON file, trigger face training, etc.
     return jsonify({"status": "ok"})
 
+#Frequency per person
+@app.route("/api/visit-frequency", methods=["GET"])
+def visit_frequency():
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT kp.full_name,
+               COUNT(vl.person_id) AS visit_count
+        FROM visitor_log vl
+        LEFT JOIN known_person kp ON vl.person_id = kp.person_id
+        WHERE vl.recognised = TRUE
+        GROUP BY kp.full_name
+        ORDER BY visit_count DESC;
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+
+    return jsonify([
+        {"name": r[0], "visits": r[1]}
+        for r in rows
+    ])
+
+#most frequent visitor
+@app.route("/api/most-frequent-visitor", methods=["GET"])
+def most_frequent_visitor():
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT kp.full_name,
+               COUNT(vl.person_id) AS visit_count
+        FROM visitor_log vl
+        LEFT JOIN known_person kp ON vl.person_id = kp.person_id
+        WHERE vl.recognised = TRUE
+        GROUP BY kp.full_name
+        ORDER BY visit_count DESC
+        LIMIT 1;
+    """)
+    row = cursor.fetchone()
+    cursor.close()
+
+    if not row:
+        return jsonify({"name": None, "visits": 0})
+
+    return jsonify({"name": row[0], "visits": row[1]})
+
+#Recent visitors
+@app.route("/api/recent-visitors", methods=["GET"])
+def recent_visitors():
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT kp.full_name,
+               vl.created_at,
+               vl.confidence
+        FROM visitor_log vl
+        LEFT JOIN known_person kp ON vl.person_id = kp.person_id
+        ORDER BY vl.created_at DESC
+        LIMIT 10;
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+
+    return jsonify([
+        {"name": r[0], "time": r[1], "confidence": float(r[2])}
+        for r in rows
+    ])
+
+# Visits over time (grouped by date)
+@app.route("/api/visits-over-time", methods=["GET"])
+def visits_over_time():
+    cursor = connection.cursor()
+    cursor.execute("""
+        SELECT DATE(created_at) AS day,
+               COUNT(*) AS visits
+        FROM visitor_log
+        WHERE recognised = TRUE
+        GROUP BY day
+        ORDER BY day ASC;
+    """)
+    rows = cursor.fetchall()
+    cursor.close()
+
+    return jsonify([
+        {"day": str(r[0]), "visits": r[1]}
+        for r in rows
+    ])
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
