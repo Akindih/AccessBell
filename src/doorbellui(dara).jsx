@@ -1,5 +1,8 @@
+import Chart from "chart.js/auto";
 import { useState, useRef, useEffect } from "react";
 import VisitorCard from "./VisitorCard.jsx";
+
+const API_BASE = "http://172.20.10.7:5000";
 
 const mockRecordings = [
   { id: 1, timestamp: "2024-04-28 14:32", duration: "2s", faces: [{ id: "f1", name: "John", x: 10, y: 10, w: 20, h: 30 }], tagged: true, filename: "rec1.mp4" },
@@ -17,7 +20,8 @@ export default function DoorbellUI() {
   const [toast, setToast] = useState(null);
   const [videoError, setVideoError] = useState(null);
   const inputRef = useRef();
-
+ 
+  
   // Fetch recordings from Pi API
   useEffect(() => {
     fetch("http://172.20.10.7:5000/api/recordings")
@@ -83,10 +87,32 @@ export default function DoorbellUI() {
 
   const untaggedCount = recordings.filter(r => r.faces.some(f => !f.name)).length;
 
+  const dashboardButton = (
+    <button
+      onClick={() => setStep("dashboard")}
+      style={{
+        marginBottom: 20,
+        padding: "16px 22px",
+        background: "#4F46E5",
+        color: "white",
+        border: "none",
+        borderRadius: 14,
+        fontSize: 20,
+        fontWeight: 700,
+        cursor: "pointer",
+        boxShadow: "0 4px 14px rgba(79,70,229,0.3)",
+      }}
+    >
+      View Dashboard
+    </button>
+  );
+
   // ── STEP 1: Recording List ──────────────────────────────────────────────
   if (step === "list") return (
     <Page>
       <TopBar title="🔔  My Doorbell" />
+
+      {dashboardButton}
 
       <div style={{ margin: "20px 28px" }}>
         <VisitorCard />
@@ -167,6 +193,8 @@ export default function DoorbellUI() {
   if (step === "video") return (
     <Page>
       <TopBar title="Who visited?" onBack={() => { setStep("list"); setSelected(null); }} backLabel="← Back to all videos" />
+
+      {dashboardButton}
 
       <Section>
         <div style={{ fontSize: 20, color: "#444", marginBottom: 20, fontWeight: 600 }}>
@@ -303,6 +331,8 @@ export default function DoorbellUI() {
     <Page>
       <TopBar title="Name this person" onBack={() => setStep("video")} backLabel="← Back to video" />
 
+      {dashboardButton}
+
       <Section>
         <div style={{
           width: 150, height: 150, borderRadius: "50%",
@@ -402,8 +432,140 @@ export default function DoorbellUI() {
       <Toast msg={toast} />
     </Page>
   );
+
+  // Step 4 (Dashboard)
+  if (step === "dashboard") return (
+    <DashboardView setStep={setStep} />
+  );
 }
 
+function DashboardView({ setStep }) {
+  const [frequency, setFrequency] = useState([]);
+  const [topVisitor, setTopVisitor] = useState(null);
+  const [recent, setRecent] = useState([]);
+  const [chart, setChart] = useState(null);
+  const canvasRef = useRef();
+
+  useEffect(() => {
+    // Fetch visit frequency
+    fetch(`${API_BASE}/api/visit-frequency`)
+      .then(res => res.json())
+      .then(setFrequency);
+
+    // Fetch most frequent visitor
+    fetch(`${API_BASE}/api/most-frequent-visitor`)
+      .then(res => res.json())
+      .then(setTopVisitor);
+
+    // Fetch recent visitors
+    fetch(`${API_BASE}/api/recent-visitors`)
+      .then(res => res.json())
+      .then(setRecent);
+
+    // Fetch visits over time for line chart
+    fetch(`${API_BASE}/api/visits-over-time`)
+      .then(res => res.json())
+      .then(data => {
+        const labels = data.map(d => d.day);
+        const values = data.map(d => d.visits);
+
+        if (chart) chart.destroy();
+
+        const newChart = new Chart(canvasRef.current, {
+          type: "line",
+          data: {
+            labels,
+            datasets: [
+              {
+                label: "Visits Over Time",
+                data: values,
+                borderColor: "#4F46E5",
+                backgroundColor: "rgba(79,70,229,0.2)",
+                borderWidth: 3,
+                tension: 0.3
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            scales: {
+              y: { beginAtZero: true }
+            }
+          }
+        });
+
+        setChart(newChart);
+      });
+  }, []);
+
+  return (
+    <Page>
+      <TopBar
+        title="Dashboard"
+        onBack={() => setStep("list")}
+        backLabel="← Back to recordings"
+      />
+
+      <Section title="Most Frequent Visitor">
+        {topVisitor ? (
+          <div style={{
+            background: "#EEF2FF",
+            padding: 20,
+            borderRadius: 14,
+            fontSize: 20,
+            fontWeight: 700,
+            color: "#3730A3"
+          }}>
+            {topVisitor.name || "Unknown"} — {topVisitor.visits} visits
+          </div>
+        ) : (
+          <p>No data yet.</p>
+        )}
+      </Section>
+
+      <Section title="Visits Over Time">
+        <canvas ref={canvasRef} height="120"></canvas>
+      </Section>
+
+      <Section title="Visit Frequency">
+        {frequency.map((item, i) => (
+          <div key={i} style={{
+            background: "white",
+            padding: 16,
+            borderRadius: 12,
+            border: "2px solid #E5E7EB",
+            marginBottom: 10,
+            fontSize: 18
+          }}>
+            {item.name}: {item.visits} visits
+          </div>
+        ))}
+      </Section>
+
+      <Section title="Recent Visitors">
+        {recent.map((item, i) => (
+          <div key={i} style={{
+            background: "#F9FAFB",
+            padding: 16,
+            borderRadius: 12,
+            border: "2px solid #E5E7EB",
+            marginBottom: 10
+          }}>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              {item.name || "Unknown"}
+            </div>
+            <div style={{ fontSize: 15, color: "#555" }}>
+              Time: {item.time}
+            </div>
+            <div style={{ fontSize: 15, color: "#555" }}>
+              Confidence: {item.confidence.toFixed(2)}
+            </div>
+          </div>
+        ))}
+      </Section>
+    </Page>
+  );
+}
 
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
