@@ -42,6 +42,12 @@ known_ids_map = load_db_ids()
 recognition_results = {"names": [], "locations": []}
 last_logged_names = set() # Session-based cooldown
 
+
+def get_relationship(person_id):
+    cursor.execute("SELECT relationship FROM known_person WHERE person_id = %s;", (person_id,))
+    row = cursor.fetchone()
+    return row[0] if row else "Unknown"
+    
 # -- Logic Functions --
 def recognition_worker(frame_queue, stop_event):
     """Background thread to handle heavy CPU face recognition."""
@@ -67,6 +73,7 @@ def recognition_worker(frame_queue, stop_event):
             names = []
             for encoding in face_encodings:
                 name = "Unknown"
+                relationship= "Unknown"
                 if known_face_encodings:
                     matches = face_recognition.compare_faces(known_face_encodings, encoding)
                     face_distances = face_recognition.face_distance(known_face_encodings, encoding)
@@ -75,20 +82,17 @@ def recognition_worker(frame_queue, stop_event):
                         name = known_face_names[best_idx]
                         person_id = known_ids_map.get(best_idx)
                         relationship = get_relationship(person_id)
+                        
+                        name = f"{name} ({relationship})"
                         # Database logging (Once per name per session)
                         if name not in last_logged_names:
                             log_to_db(name, best_idx, float(1 - face_distances[best_idx]))
                             last_logged_names.add(name)
                 names.append(name)
             
-            #recognition_results = {"names": names, "locations": face_locations}
-            name = f"{name} ({relationship})"
+            recognition_results = {"names": names, "locations": face_locations}
+            
 
-
-def get_relationship(person_id):
-    cursor.execute("SELECT relationship FROM known_person WHERE person_id = %s;", (person_id,))
-    row = cursor.fetchone()
-    return row[0] if row else "Unknown"
 
 def log_to_db(name, idx, confidence):
     try:
