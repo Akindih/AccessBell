@@ -159,11 +159,11 @@ def recent_visitors():
     cursor = connection.cursor()
     cursor.execute("""
         SELECT kp.full_name,
-               vl.created_at,
+               vl.timestamp,
                vl.confidence
         FROM visitor_log vl
         LEFT JOIN known_person kp ON vl.person_id = kp.person_id
-        ORDER BY vl.created_at DESC
+        ORDER BY vl.timestamp DESC
         LIMIT 10;
     """)
     rows = cursor.fetchall()
@@ -179,7 +179,7 @@ def recent_visitors():
 def visits_over_time():
     cursor = connection.cursor()
     cursor.execute("""
-        SELECT DATE(created_at) AS day,
+        SELECT DATE(timestamp) AS day,
                COUNT(*) AS visits
         FROM visitor_log
         WHERE recognised = TRUE
