@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+wimport { useState, useRef, useEffect } from "react";
 import VisitorCard from "../src/VisitorCard.jsx";
 
 const API_BASE = "http://172.20.10.7:5000";
