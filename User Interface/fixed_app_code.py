@@ -175,7 +175,7 @@ def recent_visitors():
     cursor.close()
 
     return jsonify([
-        {"name": r[0], "time": r[1], "confidence": float(r[2])}
+        {"name": r[0], "time": r[1].strftime("%d %b %Y, %H:%M"), "confidence": float(r[2])}
         for r in rows
     ])
 
