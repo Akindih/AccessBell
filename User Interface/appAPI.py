@@ -54,6 +54,7 @@ def health():
     })
 
 
+
 @app.route("/api/recordings")
 def get_recordings():
     if not os.path.isdir(RECORDINGS_DIR):
@@ -66,11 +67,11 @@ def get_recordings():
 
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT kp.full_name, kp.relationship, kp.last_seen,
+                 SELECT kp.full_name, kp.relationship, kp.last_seen,	
                        COUNT(vl.log_id) AS visit_count
                 FROM known_person kp
                 LEFT JOIN visitor_log vl ON kp.person_id = vl.person_id
-                GROUP BY kp.full_name, kp.relationship, kp.last_seen
+                GROUP BY kp.full_name, kp.relationship,kp.last_seen
             """)
             people_map = {
                 row[0]: {
@@ -89,22 +90,29 @@ def get_recordings():
 
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT DISTINCT kp.full_name
-                    FROM visitor_log vl
-                    JOIN known_person kp ON vl.person_id = kp.person_id
-                    WHERE vl.recognised = TRUE
-                      AND vl.timestamp BETWEEN %s AND %s
-                """, (file_time - datetime.timedelta(seconds=35), file_time + datetime.timedelta(seconds=5)))
-                recognised_names = [row[0] for row in cur.fetchall()]
+                    SELECT kp.full_name, kp.relationship, kp.last_seen,
+                           rp.confidence, COUNT(vl.log_id) as visit_count
+                    FROM recording r
+                    JOIN recording_person rp ON r.recording_id = rp.recording_id
+                    JOIN known_person kp ON rp.person_id = kp.person_id
+                    LEFT JOIN visitor_log vl ON kp.person_id = vl.person_id
+                    WHERE r.filename = %s
+                    GROUP BY kp.full_name, kp.relationship, kp.last_seen, rp.confidence
+                """, (filename, ))
+                #recognised_names = [row[0] for row in cur.fetchall()]
+                rows =cur.fetchall()
+                recognised_faces = [{"name":r[0], "confidence": float(r[3])} for r in rows]
 
+            
             known_faces = []
-            for name in recognised_names:
-                info = people_map.get(name, {})
+            #for name in recognised_names:
+            for r in rows:
                 known_faces.append({
-                    "name": name,
-                    "relationship": info.get("relationship", "Unknown"),
-                    "last_seen": info.get("last_seen"),
-                    "visit_count": info.get("visit_count", 0),
+                    "name": r[0],
+                    "relationship": r[1] or "Unknown",
+                    "last_seen": str(r[2]) if r[2] else None,
+                    "confidence": float(r[3]),
+                    "visit_count": r[4],
                 })
 
             recordings.append({
@@ -123,6 +131,7 @@ def get_recordings():
     finally:
         if conn:
             conn.close()
+ 
 
 
 @app.route("/api/video/<path:filename>")
