@@ -48,11 +48,12 @@ known_ids_map = load_db_ids()
 # -- Global State for Threading --
 recognition_results = {"names": [], "locations": []}
 last_logged_names = set() # Session-based cooldown
+unknown_logged_this_session = False
 
 # -- Logic Functions --
 def recognition_worker(frame_queue, stop_event):
     """Background thread to handle heavy CPU face recognition."""
-    global recognition_results
+    global recognition_results, unknown_logged_this_session
     frame_count = 0
     
     while not stop_event.is_set():
@@ -82,13 +83,24 @@ def recognition_worker(frame_queue, stop_event):
                         name = known_face_names[best_idx]
                         # Database logging (Once per name per session)
                         if name not in last_logged_names:
-                            log_to_db(name, best_idx, float(1 - face_distances[best_idx]))
+                            log_known_to_db(name, best_idx, float(1 - face_distances[best_idx]))
                             last_logged_names.add(name)
-                names.append(name)
-            
+                        else:
+                            if not unknown_logged_this_session:
+                                log_unknown_to_db(float(1 - best_distance))
+                                unknown_logged_this_session = True
+                                
+                    else:
+                        #No encodngs loaded at all: still log unknown visit
+                        if not unknown_logged_this_session:
+                            log_unknown_to_db(0.0)
+                            unknown_logged_this_session = True
+                                
+                    names.append(name)
             recognition_results = {"names": names, "locations": face_locations}
+            
 
-def log_to_db(name, idx, confidence):
+def log_known_to_db(name, idx, confidence):
     try:
         person_id = known_ids_map.get(idx)
         cursor.execute(
@@ -98,8 +110,22 @@ def log_to_db(name, idx, confidence):
         if person_id:
             cursor.execute("UPDATE known_person SET last_seen = NOW() WHERE person_id = %s;", (person_id,))
         connection.commit()
-        print(f"[DB] Logged: {name}")
+        print(f"[DB] Logged known visitor: {name}")
     except Exception as e:
+        connection.rollback()
+        print(f"[ERROR] DB Log failed: {e}")
+        
+
+def log_unknown_to_db(confidence):
+    try:
+        cursor.execute(
+            "INSERT INTO visitor_log (person_id, recognised, confidence) VALUES (NULL, FALSE, %s);",
+            (confidence,)
+        )
+        connection.commit()
+        print(f"[DB] Logged unknown visitor(confidence: {confidence:.2%}")
+    except Exception as e:
+        connection.rollback()
         print(f"[ERROR] DB Log failed: {e}")
 
 def record_audio(output_path, stop_event):
@@ -139,6 +165,8 @@ try:
         GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
         
         last_logged_names.clear()
+        unknown_logged_this_session =False
+        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         raw_vid = os.path.join(RECORDINGS_DIR, f"raw_{timestamp}.avi")
         raw_aud = os.path.join(RECORDINGS_DIR, f"audio_{timestamp}.wav")
@@ -222,21 +250,34 @@ try:
             os.remove(raw_aud)
             print(f"[SUCCESS] Saved: {final_out}")
             # After FFmpeg succeeds
-            cursor.execute(
-                "INSERT INTO recording (filename, recorded_at) VALUES (%s, NOW()) RETURNING recording_id;",
-                (os.path.basename(final_out),)
-            )
-            recording_id = cursor.fetchone()[0]
+            try:
+                cursor.execute(
+                    "INSERT INTO recording (filename, recorded_at) VALUES (%s, NOW()) RETURNING recording_id;",
+                    (os.path.basename(final_out),)
+                )
+                recording_id = cursor.fetchone()[0]
 
-            for name in last_logged_names:
-                cursor.execute("""
-                    INSERT INTO recording_person (recording_id, person_id, confidence)
-                    SELECT %s, person_id, MAX(confidence)
-                    FROM visitor_log
-                    WHERE person_id = (SELECT person_id FROM known_person WHERE full_name = %s)
-                    GROUP BY person_id
-                """, (recording_id, name))
-            connection.commit()
+                for name in last_logged_names:
+                    cursor.execute("""
+                        INSERT INTO recording_person (recording_id, person_id, confidence)
+                        SELECT %s, person_id, MAX(confidence)
+                        FROM visitor_log
+                        WHERE person_id = (SELECT person_id FROM known_person WHERE full_name = %s)
+                        GROUP BY person_id
+                    """, (recording_id, name))
+                    
+                    #If nobody was recognised, still log the recoring as an unknown visit
+                if not last_logged_names and unknown_logged_this_session:
+                    print(f"[INFO] Recording saved with no recognised faces.")
+                    
+                connection.commit()
+                print(f"[DB] Recording entry saved (id = {recording_id})")
+            
+            except Exception as e:
+                connection.rollback()
+                print(f"[error] Failed to save recording to DB: {e}")
+            
+        
 
 
 except KeyboardInterrupt:
